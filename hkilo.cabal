@@ -1,0 +1,18 @@
+cabal-version: 3.0
+name:          hkilo
+version:       0.1.0
+license:       MIT
+license-file:  LICENSE
+author:        boenshao
+build-type:    Simple
+
+executable hkilo
+    main-is:          hkilo.hs
+    default-language: Haskell2010
+    ghc-options:      -Wall
+    build-depends:
+        , base
+        , mtl
+        , safe
+        , time
+        , unix
