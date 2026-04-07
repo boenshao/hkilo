@@ -161,10 +161,14 @@ drawStatusBar :: EditorM ()
 drawStatusBar = do
   w <- gets screenW
   f <- gets filename
+  cx <- gets cursorX
   cy <- gets cursorY
+  dx <- gets colOffset
+  dy <- gets rowOffset
+  rx <- gets renderX
   rows' <- gets rows
   let my = length rows'
-  let rs = take w (" " ++ show (cy + 1) ++ "/" ++ show my)
+  let rs = take w (" " ++ "dx:" ++ show dx ++ ",dy:" ++ show dy ++ ",rx:" ++ show rx ++ ",cx:" ++ show cx ++ ",cy:" ++ show cy ++ ",total:" ++ show my)
   let ls = take (w - length rs) $ f ++ concat (replicate (w - length f) " ")
   editorPutStr "\x1b[7m"
   editorPutStr (ls ++ rs)
@@ -209,7 +213,7 @@ moveCursor key = do
     _ -> pure ()
   cx' <- gets cursorX
   cy' <- gets cursorY
-  let mx' = if cy' < length rows' then length (rows' !! cy') else 0
+  let mx' = if cy' < my then length (rows' !! cy') else 0
   modify' $ \st -> st{cursorX = min mx' cx'}
 
 toRx :: String -> Int
@@ -230,7 +234,7 @@ scrollScreen = do
   dx <- gets colOffset
   dy <- gets rowOffset
   rows' <- gets rows
-  when (cy < h) $ modify' $ \st -> st{renderX = toRx $ take cx (rows' !! cy)}
+  when (cy < length rows') $ modify' $ \st -> st{renderX = toRx $ take cx (rows' !! cy)}
   rx <- gets renderX
   when (rx < dx) $ modify' $ \st -> st{colOffset = rx}
   when (rx >= dx + w) $ modify' $ \st -> st{colOffset = rx - w + 1}
