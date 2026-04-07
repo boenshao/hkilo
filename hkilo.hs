@@ -234,12 +234,25 @@ scrollScreen = do
   dx <- gets colOffset
   dy <- gets rowOffset
   rows' <- gets rows
-  when (cy < length rows') $ modify' $ \st -> st{renderX = toRx $ take cx (rows' !! cy)}
+  modify' $ \st -> st{renderX = toRx $ take cx (rows' !! cy)}
   rx <- gets renderX
   when (rx < dx) $ modify' $ \st -> st{colOffset = rx}
   when (rx >= dx + w) $ modify' $ \st -> st{colOffset = rx - w + 1}
   when (cy < dy) $ modify' $ \st -> st{rowOffset = cy}
   when (cy >= dy + h) $ modify' $ \st -> st{rowOffset = cy - h + 1}
+
+insertChar :: String -> Int -> Char -> String
+insertChar s i c = front ++ c : back where (front, back) = splitAt i s
+
+editorInsertChar :: Char -> EditorM ()
+editorInsertChar c = do
+  cx <- gets cursorX
+  cy <- gets cursorY
+  rows' <- gets rows
+  let rows'' = case splitAt cy rows' of
+        (front, s : back) -> front ++ insertChar s cx c : back
+        (front, []) -> front ++ [[c]]
+  modify' $ \st -> st{rows = rows'', render = map renderRow rows'', cursorX = cx + 1}
 
 data EditorKey
   = ArrowLeft
@@ -318,12 +331,17 @@ editorLoop = do
     PageDown -> moveCursor key
     Home -> moveCursor key
     End -> moveCursor key
+    Delete -> pure ()
     Literal b
       | b == ctrlKey 'q' ->
           editorPutStr "\x1b[2J" -- clear screen
             >> editorPutStr "\x1b[H" -- put cursor top-left
             >> liftIO exitSuccess
-    _ -> pure ()
+      | b == ctrlKey 'h' -> pure ()
+      | b == ctrlKey 'l' -> pure ()
+      | b == '\x1b' -> pure ()
+      | b == '\r' -> pure ()
+      | otherwise -> editorInsertChar b
 
   editorLoop
 
