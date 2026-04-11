@@ -29,11 +29,14 @@ data Editor = Editor
   , colOffset :: !Int
   , rowOffset :: !Int
   , renderX :: !Int
-  , rows :: ![String]
+  , dirty :: !Int
+  , -- TODO: mutable buffers
+    rows :: ![String]
   , render :: ![String]
   , filename :: !String
   , message :: !String
   , messageTime :: UTCTime
+  , quitCount :: Int
   }
 
 type EditorM = StateT Editor IO
@@ -90,6 +93,9 @@ renderRow s = go s 0
     i' = i + 1
     r = tabW - (i' `rem` tabW)
 
+quitTime :: Int
+quitTime = 2
+
 editorInit :: Maybe String -> IO Editor
 editorInit f = do
   (w, h) <- getScreenSize
@@ -106,11 +112,13 @@ editorInit f = do
       , colOffset = 0
       , rowOffset = 0
       , renderX = 0
+      , dirty = 0
       , rows = rows'
       , render = map renderRow rows'
       , filename = fromMaybe "[No Name]" f
-      , message = "HELP: Ctrl-Q = quit"
+      , message = "HELP: Ctrl-S = save | Ctrl-Q = quit"
       , messageTime = now
+      , quitCount = quitTime
       }
 
 editorPutStr :: String -> EditorM ()
@@ -166,14 +174,21 @@ drawStatusBar = do
   dx <- gets colOffset
   dy <- gets rowOffset
   rx <- gets renderX
+  dirty' <- gets dirty
   rows' <- gets rows
+  let f' = f ++ if dirty' > 0 then "*" else ""
   let my = length rows'
   let rs = take w (" " ++ "dx:" ++ show dx ++ ",dy:" ++ show dy ++ ",rx:" ++ show rx ++ ",cx:" ++ show cx ++ ",cy:" ++ show cy ++ ",total:" ++ show my)
-  let ls = take (w - length rs) $ f ++ concat (replicate (w - length f) " ")
+  let ls = take (w - length rs) $ f' ++ concat (replicate (w - length f') " ")
   editorPutStr "\x1b[7m"
   editorPutStr (ls ++ rs)
   editorPutStr "\x1b[m"
   editorPutStr "\r\n"
+
+setStatusMessage :: String -> EditorM ()
+setStatusMessage s = do
+  now <- liftIO getCurrentTime
+  modify' $ \st -> st{message = s, messageTime = now}
 
 drawStatusMessage :: EditorM ()
 drawStatusMessage = do
@@ -249,13 +264,37 @@ editorInsertChar c = do
   cx <- gets cursorX
   cy <- gets cursorY
   rows' <- gets rows
+  dirty' <- gets dirty
   let rows'' = case splitAt cy rows' of
         (front, s : back) -> front ++ insertChar s cx c : back
         (front, []) -> front ++ [[c]]
-  modify' $ \st -> st{rows = rows'', render = map renderRow rows'', cursorX = cx + 1}
+  modify' $ \st ->
+    st
+      { rows = rows''
+      , render = map renderRow rows''
+      , cursorX = cx + 1
+      , dirty = dirty' + 1
+      }
+
+rowsToString :: [String] -> String
+rowsToString rs =
+  case rs of
+    s : rest -> s ++ "\n" ++ rowsToString rest
+    _ -> ""
+
+editorSave :: EditorM ()
+editorSave = do
+  rows' <- gets rows
+  f <- gets filename
+  -- TODO: error handling
+  liftIO $ writeFile f (rowsToString rows')
+  -- TODO: log number of bytes written
+  modify' $ \st -> st{dirty = 0}
+  setStatusMessage "Saved"
 
 data EditorKey
-  = ArrowLeft
+  = Backspace
+  | ArrowLeft
   | ArrowRight
   | ArrowUp
   | ArrowDown
@@ -273,8 +312,9 @@ readKey :: EditorM EditorKey
 readKey = do
   c <- editorGetChar
   if c /= '\x1b'
-    then
-      pure (Literal c)
+    then pure $ case ord c of
+      127 -> Backspace
+      _ -> Literal c
     else do
       c0 <- editorGetChar
       case c0 of
@@ -321,8 +361,11 @@ editorLoop = do
   drawStatusMessage
   drawCursor
 
+  dirty' <- gets dirty
+  q <- gets quitCount
   key <- readKey
   case key of
+    Backspace -> pure ()
     ArrowLeft -> moveCursor key
     ArrowRight -> moveCursor key
     ArrowUp -> moveCursor key
@@ -334,15 +377,23 @@ editorLoop = do
     Delete -> pure ()
     Literal b
       | b == ctrlKey 'q' ->
-          editorPutStr "\x1b[2J" -- clear screen
-            >> editorPutStr "\x1b[H" -- put cursor top-left
-            >> liftIO exitSuccess
+          if dirty' > 0 && q > 0
+            then do
+              setStatusMessage ("WARNING!!! File has unsaved changes. Press Ctrl-Q " ++ show q ++ " more times to quit.")
+              modify' $ \st -> st{quitCount = q - 1}
+              editorLoop
+            else
+              editorPutStr "\x1b[2J" -- clear screen
+                >> editorPutStr "\x1b[H" -- put cursor top-left
+                >> liftIO exitSuccess
+      | b == ctrlKey 's' -> editorSave
       | b == ctrlKey 'h' -> pure ()
       | b == ctrlKey 'l' -> pure ()
       | b == '\x1b' -> pure ()
       | b == '\r' -> pure ()
       | otherwise -> editorInsertChar b
 
+  modify' $ \st -> st{quitCount = quitTime}
   editorLoop
 
 setupRawMode :: IO a -> IO a
