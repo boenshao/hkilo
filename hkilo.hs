@@ -276,6 +276,65 @@ editorInsertChar c = do
       , dirty = dirty' + 1
       }
 
+editorInderNewLine :: EditorM ()
+editorInderNewLine = do
+  cx <- gets cursorX
+  cy <- gets cursorY
+  rows' <- gets rows
+  dirty' <- gets dirty
+  let rows'' = case splitAt cy rows' of
+        (front, s : back) -> front ++ s1 : s2 : back where (s1, s2) = splitAt cx s
+        (front, []) -> front ++ [""]
+  modify' $ \st ->
+    st
+      { rows = rows''
+      , render = map renderRow rows''
+      , cursorX = 0
+      , cursorY = cy + 1
+      , dirty = dirty' + 1
+      }
+
+deleteChar :: String -> Int -> String
+deleteChar s i = front ++ back where (front, _ : back) = splitAt i s
+
+editorDeleteChar :: EditorM ()
+editorDeleteChar = do
+  cx <- gets cursorX
+  cy <- gets cursorY
+  rows' <- gets rows
+  dirty' <- gets dirty
+  let my = length rows'
+  if cy == my || cx == 0 && cy == 0
+    then pure ()
+    else
+      if cx > 0
+        -- FIXME: theres a bug on last line
+        -- TODO: a better pattern match
+        then do
+          let rows'' = case splitAt cy rows' of
+                (front, s : back) -> front ++ deleteChar s (cx - 1) : back
+                (front, []) -> front
+          modify' $ \st ->
+            st
+              { rows = rows''
+              , render = map renderRow rows''
+              , cursorX = cx - 1
+              , dirty = dirty' + 1
+              }
+        else do
+          let rows'' = case splitAt (cy - 1) rows' of
+                (front, s1 : s2 : back) -> front ++ (s1 ++ s2) : back
+                (front, s1 : back) -> front ++ s1 : back
+                (front, []) -> front
+          modify' $ \st ->
+            st
+              { rows = rows''
+              , render = map renderRow rows''
+              , cursorX = length $ rows' !! (cy - 1)
+              , cursorY = cy - 1
+              , dirty = dirty' + 1
+              }
+
 rowsToString :: [String] -> String
 rowsToString rs =
   case rs of
@@ -365,7 +424,7 @@ editorLoop = do
   q <- gets quitCount
   key <- readKey
   case key of
-    Backspace -> pure ()
+    Backspace -> editorDeleteChar
     ArrowLeft -> moveCursor key
     ArrowRight -> moveCursor key
     ArrowUp -> moveCursor key
@@ -374,7 +433,7 @@ editorLoop = do
     PageDown -> moveCursor key
     Home -> moveCursor key
     End -> moveCursor key
-    Delete -> pure ()
+    Delete -> moveCursor ArrowRight >> editorDeleteChar
     Literal b
       | b == ctrlKey 'q' ->
           if dirty' > 0 && q > 0
@@ -390,7 +449,7 @@ editorLoop = do
       | b == ctrlKey 'h' -> pure ()
       | b == ctrlKey 'l' -> pure ()
       | b == '\x1b' -> pure ()
-      | b == '\r' -> pure ()
+      | b == '\r' -> editorInderNewLine
       | otherwise -> editorInsertChar b
 
   modify' $ \st -> st{quitCount = quitTime}
