@@ -33,7 +33,7 @@ data Editor = Editor
   , -- TODO: mutable buffers
     rows :: ![String]
   , render :: ![String]
-  , filename :: !String
+  , filename :: !(Maybe String)
   , message :: !String
   , messageTime :: UTCTime
   , quitCount :: Int
@@ -115,7 +115,7 @@ editorInit f = do
       , dirty = 0
       , rows = rows'
       , render = map renderRow rows'
-      , filename = fromMaybe "[No Name]" f
+      , filename = f
       , message = "HELP: Ctrl-S = save | Ctrl-Q = quit"
       , messageTime = now
       , quitCount = quitTime
@@ -176,7 +176,7 @@ drawStatusBar = do
   rx <- gets renderX
   dirty' <- gets dirty
   rows' <- gets rows
-  let f' = f ++ if dirty' > 0 then "*" else ""
+  let f' = fromMaybe "[No Name]" f ++ if dirty' > 0 then "*" else ""
   let my = length rows'
   let rs = take w (" " ++ "dx:" ++ show dx ++ ",dy:" ++ show dy ++ ",rx:" ++ show rx ++ ",cx:" ++ show cx ++ ",cy:" ++ show cy ++ ",total:" ++ show my)
   let ls = take (w - length rs) $ f' ++ concat (replicate (w - length f') " ")
@@ -308,7 +308,6 @@ editorDeleteChar = do
     then pure ()
     else
       if cx > 0
-        -- FIXME: theres a bug on last line
         -- TODO: a better pattern match
         then do
           let rows'' = case splitAt cy rows' of
@@ -341,15 +340,48 @@ rowsToString rs =
     s : rest -> s ++ "\n" ++ rowsToString rest
     _ -> ""
 
+safeInit :: String -> String
+safeInit s = if null s then s else init s
+
+editorPrompt :: String -> EditorM String
+editorPrompt s = go s ""
+ where
+  go s' r = do
+    setStatusMessage (s' ++ r)
+    scrollScreen
+    drawRows
+    drawStatusBar
+    drawStatusMessage
+    drawCursor
+    key <- readKey
+    case key of
+      Backspace -> go s' (safeInit r)
+      Delete -> go s' (safeInit r)
+      Literal b
+        | not (isControl b) && (ord b < 128) -> go s' (r ++ [b])
+        | b == '\r' -> do
+            setStatusMessage ""
+            pure r
+        | b == ctrlKey 'h' -> go s' (safeInit r)
+        | otherwise -> go s' r
+      _ -> go s' r
+
 editorSave :: EditorM ()
 editorSave = do
   rows' <- gets rows
   f <- gets filename
-  -- TODO: error handling
-  liftIO $ writeFile f (rowsToString rows')
-  -- TODO: log number of bytes written
-  modify' $ \st -> st{dirty = 0}
-  setStatusMessage "Saved"
+  f' <- case f of
+    Just s -> pure s
+    Nothing -> editorPrompt "Save as: "
+  if null f'
+    then
+      setStatusMessage "Save aborted"
+    else do
+      let fileContents = rowsToString rows'
+      -- TODO: error handling
+      liftIO $ writeFile f' fileContents
+      modify' $ \st -> st{dirty = 0, filename = Just f'}
+      setStatusMessage $ show (length fileContents) ++ " bytes written to disk"
 
 data EditorKey
   = Backspace
