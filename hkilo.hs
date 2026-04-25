@@ -155,16 +155,6 @@ drawRows = do
     editorPutStr "\r\n"
     when (n < h - 1) $ go (n + 1)
 
-drawCursor :: EditorM ()
-drawCursor = do
-  rx <- gets renderX
-  cy <- gets cursorY
-  dx <- gets colOffset
-  dy <- gets rowOffset
-  editorPutStr $ -- terminal is 1-indexed
-    "\x1b[" ++ show (cy - dy + 1) ++ ";" ++ show (rx - dx + 1) ++ "H"
-  editorPutStr "\x1b[?25h" -- show cursor
-
 drawStatusBar :: EditorM ()
 drawStatusBar = do
   w <- gets screenW
@@ -199,8 +189,52 @@ drawStatusMessage = do
   editorPutStr "\x1b[K"
   when (diffUTCTime now mt < 5) $ editorPutStr (take w m)
 
-moveCursor :: EditorKey -> EditorM ()
-moveCursor key = do
+drawCursor :: EditorM ()
+drawCursor = do
+  rx <- gets renderX
+  cy <- gets cursorY
+  dx <- gets colOffset
+  dy <- gets rowOffset
+  editorPutStr $ -- terminal is 1-indexed
+    "\x1b[" ++ show (cy - dy + 1) ++ ";" ++ show (rx - dx + 1) ++ "H"
+  editorPutStr "\x1b[?25h" -- show cursor
+
+
+toRx :: String -> Int
+toRx row = go row 0
+ where
+  go s rx =
+    case s of
+      '\t' : rest -> go rest (rx + (tabW - ((rx + 1) `rem` tabW)))
+      _ : rest -> go rest (rx + 1)
+      _ -> rx
+
+scrollScreen :: EditorM ()
+scrollScreen = do
+  w <- gets screenW
+  h <- gets screenH
+  cx <- gets cursorX
+  cy <- gets cursorY
+  dx <- gets colOffset
+  dy <- gets rowOffset
+  rows' <- gets rows
+  modify' $ \st -> st{renderX = toRx $ take cx (rows' !! cy)}
+  rx <- gets renderX
+  when (rx < dx) $ modify' $ \st -> st{colOffset = rx}
+  when (rx >= dx + w) $ modify' $ \st -> st{colOffset = rx - w + 1}
+  when (cy < dy) $ modify' $ \st -> st{rowOffset = cy}
+  when (cy >= dy + h) $ modify' $ \st -> st{rowOffset = cy - h + 1}
+
+editorRefreshScreen :: EditorM ()
+editorRefreshScreen = do
+  scrollScreen
+  drawRows
+  drawStatusBar
+  drawStatusMessage
+  drawCursor
+
+editorMoveCursor :: EditorKey -> EditorM ()
+editorMoveCursor key = do
   h <- gets screenH
   cx <- gets cursorX
   cy <- gets cursorY
@@ -231,30 +265,6 @@ moveCursor key = do
   let mx' = if cy' < my then length (rows' !! cy') else 0
   modify' $ \st -> st{cursorX = min mx' cx'}
 
-toRx :: String -> Int
-toRx row = go row 0
- where
-  go s rx =
-    case s of
-      '\t' : rest -> go rest (rx + (tabW - ((rx + 1) `rem` tabW)))
-      _ : rest -> go rest (rx + 1)
-      _ -> rx
-
-scrollScreen :: EditorM ()
-scrollScreen = do
-  w <- gets screenW
-  h <- gets screenH
-  cx <- gets cursorX
-  cy <- gets cursorY
-  dx <- gets colOffset
-  dy <- gets rowOffset
-  rows' <- gets rows
-  modify' $ \st -> st{renderX = toRx $ take cx (rows' !! cy)}
-  rx <- gets renderX
-  when (rx < dx) $ modify' $ \st -> st{colOffset = rx}
-  when (rx >= dx + w) $ modify' $ \st -> st{colOffset = rx - w + 1}
-  when (cy < dy) $ modify' $ \st -> st{rowOffset = cy}
-  when (cy >= dy + h) $ modify' $ \st -> st{rowOffset = cy - h + 1}
 
 insertChar :: String -> Int -> Char -> String
 insertChar s i c = front ++ c : back where (front, back) = splitAt i s
@@ -440,13 +450,6 @@ readKey = do
         _ ->
           pure (Literal c)
 
-editorRefreshScreen :: EditorM ()
-editorRefreshScreen = do
-  scrollScreen
-  drawRows
-  drawStatusBar
-  drawStatusMessage
-  drawCursor
 
 editorLoop :: EditorM ()
 editorLoop = do
@@ -456,15 +459,15 @@ editorLoop = do
   key <- readKey
   case key of
     Backspace -> editorDeleteChar
-    ArrowLeft -> moveCursor key
-    ArrowRight -> moveCursor key
-    ArrowUp -> moveCursor key
-    ArrowDown -> moveCursor key
-    PageUp -> moveCursor key
-    PageDown -> moveCursor key
-    Home -> moveCursor key
-    End -> moveCursor key
-    Delete -> moveCursor ArrowRight >> editorDeleteChar
+    ArrowLeft -> editorMoveCursor key
+    ArrowRight -> editorMoveCursor key
+    ArrowUp -> editorMoveCursor key
+    ArrowDown -> editorMoveCursor key
+    PageUp -> editorMoveCursor key
+    PageDown -> editorMoveCursor key
+    Home -> editorMoveCursor key
+    End -> editorMoveCursor key
+    Delete -> editorMoveCursor ArrowRight >> editorDeleteChar
     Literal b
       | b == ctrlKey 'q' ->
           if dirty' > 0 && q > 0
